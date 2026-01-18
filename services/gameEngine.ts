@@ -9,7 +9,8 @@ import {
   EnemyType,
   Particle,
   PowerUp,
-  PowerUpType
+  PowerUpType,
+  DifficultySettings
 } from '../types';
 import {
   SCREEN_WIDTH,
@@ -28,23 +29,23 @@ import { checkAABB, checkCircleCollision, clamp, generateId, getDistance, random
 
 // --- Spawning Logic ---
 
-const spawnEnemy = (state: GameState, x: number, type: EnemyType, levelFactor: number) => {
+const spawnEnemy = (state: GameState, x: number, type: EnemyType, levelFactor: number, settings: DifficultySettings) => {
   const isBoss = type === EnemyType.BOSS;
-  let hp = 10 * levelFactor;
+  let hp = 10 * levelFactor * settings.enemyHealthMultiplier;
   let width = ENEMY_AIR_SIZE;
   let height = ENEMY_AIR_SIZE;
   let vy = 2;
 
   if (type === EnemyType.TURRET) {
-    hp = 20 * levelFactor;
+    hp = 5 * levelFactor * settings.enemyHealthMultiplier; // Reduced from 20 to 5
     width = ENEMY_TURRET_SIZE;
     height = ENEMY_TURRET_SIZE;
     vy = SCROLL_SPEED; // Moves with background
   } else if (type === EnemyType.SUPPLY) {
-    hp = 5;
+    hp = 5; // Supply ships generally constant
     vy = 3;
   } else if (isBoss) {
-    hp = 500 * levelFactor;
+    hp = 500 * levelFactor * settings.bossHealthMultiplier;
     width = ENEMY_BOSS_SIZE;
     height = ENEMY_BOSS_SIZE;
     vy = 1; // Moves slowly into position then stops usually
@@ -69,22 +70,23 @@ const spawnEnemy = (state: GameState, x: number, type: EnemyType, levelFactor: n
   });
 };
 
-const handleSpawning = (state: GameState) => {
+const handleSpawning = (state: GameState, settings: DifficultySettings) => {
   state.waveTimer++;
 
   // Simple procedural generation for demo purposes
   // In a real app, parse Level 1-10 data structures here
-  const spawnRate = Math.max(20, 100 - state.level * 5); // Spawns get faster
-  
+  const baseSpawnRate = Math.max(20, 100 - state.level * 5); // Spawns get faster
+  const spawnRate = Math.max(10, Math.floor(baseSpawnRate * settings.enemySpawnRateMultiplier));
+
   if (state.waveTimer % spawnRate === 0) {
     // 10% chance for supply, 20% turret, 70% aircraft
     const rand = Math.random();
     if (rand < 0.1) {
-      spawnEnemy(state, randomRange(50, SCREEN_WIDTH - 50), EnemyType.SUPPLY, state.level);
+      spawnEnemy(state, randomRange(50, SCREEN_WIDTH - 50), EnemyType.SUPPLY, state.level, settings);
     } else if (rand < 0.3) {
-      spawnEnemy(state, randomRange(50, SCREEN_WIDTH - 50), EnemyType.TURRET, state.level);
+      spawnEnemy(state, randomRange(50, SCREEN_WIDTH - 50), EnemyType.TURRET, state.level, settings);
     } else {
-      spawnEnemy(state, randomRange(50, SCREEN_WIDTH - 50), EnemyType.AIRCRAFT, state.level);
+      spawnEnemy(state, randomRange(50, SCREEN_WIDTH - 50), EnemyType.AIRCRAFT, state.level, settings);
     }
   }
 
@@ -92,9 +94,9 @@ const handleSpawning = (state: GameState) => {
   // For demo, let's spawn a boss if one doesn't exist and waveTimer is high
   const hasBoss = state.enemies.some(e => e.type === EnemyType.BOSS);
   if (!hasBoss && state.waveTimer > 2000) {
-     spawnEnemy(state, SCREEN_WIDTH / 2 - ENEMY_BOSS_SIZE / 2, EnemyType.BOSS, state.level);
-     state.waveTimer = 0; // Reset for next cycle
-     state.level++; // Increment level on boss spawn for difficulty ramp
+    spawnEnemy(state, SCREEN_WIDTH / 2 - ENEMY_BOSS_SIZE / 2, EnemyType.BOSS, state.level, settings);
+    state.waveTimer = 0; // Reset for next cycle
+    state.level++; // Increment level on boss spawn for difficulty ramp
   }
 };
 
@@ -129,8 +131,8 @@ const fireAirWeapon = (state: GameState, time: number) => {
     const damage = 2 + level;
     createBullet(0, -12, damage);
     if (level >= 3) {
-        createBullet(-1, -12, damage);
-        createBullet(1, -12, damage);
+      createBullet(-1, -12, damage);
+      createBullet(1, -12, damage);
     }
   } else {
     // Red: Missile/Spread
@@ -155,20 +157,25 @@ const fireGroundWeapon = (state: GameState, time: number) => {
   const targetY = p.y - 200; // Fixed reticle distance
   const targetX = p.x + p.width / 2;
 
-  // Logic for Auto-Lock (Level 3)
+  // Logic for Auto-Lock (Level 3) OR Basic Aim Assist (Level 1-2)
+  // "Ground attack reticle will automatically aim at a specific range of ground turrets near the reticle"
+  // We apply a "Magnetic Reticle" for all levels if target is close enough.
+
   let actualTargetX = targetX;
   let actualTargetY = targetY;
 
-  if (p.groundWeaponLevel === GroundWeaponLevel.AUTO) {
-    // Find closest ground target near reticle
-    const target = state.enemies.find(e => 
-      (e.type === EnemyType.TURRET || e.type === EnemyType.BOSS) &&
-      getDistance({x: targetX, y: targetY}, {x: e.x + e.width/2, y: e.y + e.height/2}) < 150
-    );
-    if (target) {
-      actualTargetX = target.x + target.width/2;
-      actualTargetY = target.y + target.height/2;
-    }
+  // Aim Assist Radius: Level 3 = Full Screen/Large, Level 1-2 = 100px
+  const aimAssistRadius = p.groundWeaponLevel === GroundWeaponLevel.AUTO ? 300 : 100;
+
+  // Find closest ground target near reticle
+  const target = state.enemies.find(e =>
+    (e.type === EnemyType.TURRET || e.type === EnemyType.BOSS) &&
+    getDistance({ x: targetX, y: targetY }, { x: e.x + e.width / 2, y: e.y + e.height / 2 }) < aimAssistRadius
+  );
+
+  if (target) {
+    actualTargetX = target.x + target.width / 2;
+    actualTargetY = target.y + target.height / 2;
   }
 
   // Spawn Bomb
@@ -178,8 +185,8 @@ const fireGroundWeapon = (state: GameState, time: number) => {
     y: p.y + p.height / 2,
     width: 12,
     height: 12,
-    vx: (actualTargetX - (p.x + p.width/2)) / 20, // Travel to target in 20 frames
-    vy: (actualTargetY - (p.y + p.height/2)) / 20,
+    vx: (actualTargetX - (p.x + p.width / 2)) / 20, // Travel to target in 20 frames
+    vy: (actualTargetY - (p.y + p.height / 2)) / 20,
     isPlayer: true,
     isGround: true,
     damage: 20,
@@ -194,14 +201,14 @@ const triggerUltimate = (state: GameState) => {
     state.player.ultimates--;
     state.flashTimer = 20;
     state.shakeTimer = 30;
-    
+
     // Clear enemy bullets
     state.projectiles = state.projectiles.filter(p => p.isPlayer);
-    
+
     // Damage all enemies
     state.enemies.forEach(e => {
       e.hp -= 100; // Massive damage
-      spawnExplosion(state, e.x + e.width/2, e.y + e.height/2, 'CYAN', 10);
+      spawnExplosion(state, e.x + e.width / 2, e.y + e.height / 2, 'CYAN', 10);
     });
   }
 };
@@ -236,7 +243,7 @@ const spawnPowerUp = (state: GameState, x: number, y: number) => {
 
 // --- Main Update Function ---
 
-export const updateGameState = (state: GameState, input: InputState): GameState => {
+export const updateGameState = (state: GameState, input: InputState, settings: DifficultySettings): GameState => {
   if (state.gameOver || state.paused) return state;
 
   const now = Date.now();
@@ -260,27 +267,27 @@ export const updateGameState = (state: GameState, input: InputState): GameState 
   if (input.fireAir) fireAirWeapon(state, now);
   if (input.fireGround) fireGroundWeapon(state, now);
   if (input.ultimate && !state.player.lastFiredAir /* debounce hack not needed if using edge trigger logic in hook */) {
-     // Handled via edge trigger in hook usually, or simple boolean here with cooldown
-     // For this loop, we assume input.ultimate is "pressed"
-     // We should add a cooldown/state flag for ultimate key press to avoid rapid fire
+    // Handled via edge trigger in hook usually, or simple boolean here with cooldown
+    // For this loop, we assume input.ultimate is "pressed"
+    // We should add a cooldown/state flag for ultimate key press to avoid rapid fire
   }
 
   // 3. Projectiles Update
   state.projectiles.forEach(p => {
     if (p.isGround && p.target) {
       // Logic for ground bombs: move to target then explode
-      const dist = getDistance({x: p.x, y: p.y}, p.target);
+      const dist = getDistance({ x: p.x, y: p.y }, p.target);
       if (dist < 10) {
-         p.markedForDeletion = true;
-         // AOE Damage
-         spawnExplosion(state, p.x, p.y, '#fbbf24', 10);
-         state.enemies.forEach(e => {
-             // Ground bombs only hit Ground units (Turrets, Boss)
-             const canHit = e.type === EnemyType.TURRET || e.type === EnemyType.BOSS;
-             if (canHit && getDistance({x: p.x, y: p.y}, {x: e.x + e.width/2, y: e.y + e.height/2}) < (p.blastRadius || 30) + e.width/2) {
-                 e.hp -= p.damage;
-             }
-         });
+        p.markedForDeletion = true;
+        // AOE Damage
+        spawnExplosion(state, p.x, p.y, '#fbbf24', 10);
+        state.enemies.forEach(e => {
+          // Ground bombs only hit Ground units (Turrets, Boss)
+          const canHit = e.type === EnemyType.TURRET || e.type === EnemyType.BOSS;
+          if (canHit && getDistance({ x: p.x, y: p.y }, { x: e.x + e.width / 2, y: e.y + e.height / 2 }) < (p.blastRadius || 30) + e.width / 2) {
+            e.hp -= p.damage;
+          }
+        });
       }
     }
 
@@ -299,70 +306,70 @@ export const updateGameState = (state: GameState, input: InputState): GameState 
     e.y += e.vy;
 
     if (e.type === EnemyType.TURRET) {
-        // Rotate towards player
-        const cx = e.x + e.width / 2;
-        const cy = e.y + e.height / 2;
-        e.angle = Math.atan2(state.player.y - cy, state.player.x - cx);
-        
-        // Fire at player
-        e.fireTimer++;
-        if (e.fireTimer > 100 && e.y > 0 && e.y < SCREEN_HEIGHT) {
-            e.fireTimer = 0;
-            const bulletSpeed = 4;
-            state.projectiles.push({
-                id: generateId(),
-                x: cx, y: cy,
-                width: 8, height: 8,
-                vx: Math.cos(e.angle) * bulletSpeed,
-                vy: Math.sin(e.angle) * bulletSpeed,
-                isPlayer: false,
-                isGround: false,
-                damage: 10,
-                hp: 1, maxHp: 1, markedForDeletion: false
-            });
-        }
-    } else if (e.type === EnemyType.BOSS) {
-        // Simple Boss AI
-        if (e.y < 100) e.vy = 1; else e.vy = 0; // Enter screen then stop
-        e.fireTimer++;
-        
-        // Phase logic
-        if (e.hp < e.maxHp * 0.5) e.phase = 2;
+      // Rotate towards player
+      const cx = e.x + e.width / 2;
+      const cy = e.y + e.height / 2;
+      e.angle = Math.atan2(state.player.y - cy, state.player.x - cx);
 
-        const rate = e.phase === 2 ? 30 : 60;
-        
-        if (e.fireTimer > rate) {
-            e.fireTimer = 0;
-            // Boss Pattern: Spread shot
-            for(let i=-2; i<=2; i++) {
-                state.projectiles.push({
-                    id: generateId(),
-                    x: e.x + e.width/2, y: e.y + e.height,
-                    width: 10, height: 10,
-                    vx: i * 2,
-                    vy: 5,
-                    isPlayer: false,
-                    isGround: false,
-                    damage: 10,
-                    hp: 1, maxHp: 1, markedForDeletion: false
-                });
-            }
+      // Fire at player
+      e.fireTimer++;
+      if (e.fireTimer > 100 && e.y > 0 && e.y < SCREEN_HEIGHT) {
+        e.fireTimer = 0;
+        const bulletSpeed = 4;
+        state.projectiles.push({
+          id: generateId(),
+          x: cx, y: cy,
+          width: 8, height: 8,
+          vx: Math.cos(e.angle) * bulletSpeed,
+          vy: Math.sin(e.angle) * bulletSpeed,
+          isPlayer: false,
+          isGround: false,
+          damage: 10,
+          hp: 1, maxHp: 1, markedForDeletion: false
+        });
+      }
+    } else if (e.type === EnemyType.BOSS) {
+      // Simple Boss AI
+      if (e.y < 100) e.vy = 1; else e.vy = 0; // Enter screen then stop
+      e.fireTimer++;
+
+      // Phase logic
+      if (e.hp < e.maxHp * 0.5) e.phase = 2;
+
+      const rate = e.phase === 2 ? 30 : 60;
+
+      if (e.fireTimer > rate) {
+        e.fireTimer = 0;
+        // Boss Pattern: Spread shot
+        for (let i = -2; i <= 2; i++) {
+          state.projectiles.push({
+            id: generateId(),
+            x: e.x + e.width / 2, y: e.y + e.height,
+            width: 10, height: 10,
+            vx: i * 2,
+            vy: 5,
+            isPlayer: false,
+            isGround: false,
+            damage: 10,
+            hp: 1, maxHp: 1, markedForDeletion: false
+          });
         }
+      }
     } else if (e.type === EnemyType.AIRCRAFT) {
-        // Basic shoot down
-        e.fireTimer++;
-        if (e.fireTimer > 120 && Math.random() < 0.01) {
-             state.projectiles.push({
-                id: generateId(),
-                x: e.x + e.width/2, y: e.y + e.height,
-                width: 6, height: 6,
-                vx: 0, vy: 5,
-                isPlayer: false,
-                isGround: false,
-                damage: 10,
-                hp: 1, maxHp: 1, markedForDeletion: false
-            });
-        }
+      // Basic shoot down
+      e.fireTimer++;
+      if (e.fireTimer > 120 && Math.random() < 0.01) {
+        state.projectiles.push({
+          id: generateId(),
+          x: e.x + e.width / 2, y: e.y + e.height,
+          width: 6, height: 6,
+          vx: 0, vy: 5,
+          isPlayer: false,
+          isGround: false,
+          damage: 10,
+          hp: 1, maxHp: 1, markedForDeletion: false
+        });
+      }
     }
 
     // Cleanup off-screen
@@ -370,94 +377,94 @@ export const updateGameState = (state: GameState, input: InputState): GameState 
   });
 
   // 5. Collision Detection
-  
+
   // Player vs Enemy Projectiles/Bodies
   if (state.player.invincibleTimer === 0) {
-      // Vs Projectiles
-      state.projectiles.forEach(p => {
-          if (!p.isPlayer && !p.markedForDeletion && checkAABB(state.player, p)) {
-              state.player.hp -= p.damage;
-              state.player.invincibleTimer = INVINCIBILITY_TIME;
-              p.markedForDeletion = true;
-              state.shakeTimer = 10;
-              spawnExplosion(state, state.player.x, state.player.y, '#ef4444', 5);
-          }
-      });
-      // Vs Enemies
-      state.enemies.forEach(e => {
-          if (!e.markedForDeletion && checkAABB(state.player, e)) {
-              state.player.hp -= 20;
-              state.player.invincibleTimer = INVINCIBILITY_TIME;
-              state.shakeTimer = 15;
-              spawnExplosion(state, state.player.x, state.player.y, '#ef4444', 10);
-              // Crash damage to enemy
-              e.hp -= 50; 
-          }
-      });
+    // Vs Projectiles
+    state.projectiles.forEach(p => {
+      if (!p.isPlayer && !p.markedForDeletion && checkAABB(state.player, p)) {
+        state.player.hp -= p.damage;
+        state.player.invincibleTimer = INVINCIBILITY_TIME;
+        p.markedForDeletion = true;
+        state.shakeTimer = 10;
+        spawnExplosion(state, state.player.x, state.player.y, '#ef4444', 5);
+      }
+    });
+    // Vs Enemies
+    state.enemies.forEach(e => {
+      if (!e.markedForDeletion && checkAABB(state.player, e)) {
+        state.player.hp -= 20;
+        state.player.invincibleTimer = INVINCIBILITY_TIME;
+        state.shakeTimer = 15;
+        spawnExplosion(state, state.player.x, state.player.y, '#ef4444', 10);
+        // Crash damage to enemy
+        e.hp -= 50;
+      }
+    });
   }
 
   // Player Projectiles vs Enemies
   state.projectiles.forEach(p => {
-      if (p.isPlayer && !p.isGround && !p.markedForDeletion) {
-          state.enemies.forEach(e => {
-              if (!e.markedForDeletion) {
-                  // Air bullets hit everything, but logical checks apply
-                  // Turrets are ground units, technically air bullets shouldn't hit them in some rigorous sims,
-                  // but for fun arcades, we usually allow it or require ground bombs. 
-                  // Prompt implies "Air-to-Air" and "Air-to-Ground", suggesting separation.
-                  // Let's enforce: Air weapons -> Aircraft/Supply/Boss. Ground weapons -> Turret/Boss.
-                  
-                  const isAirTarget = e.type === EnemyType.AIRCRAFT || e.type === EnemyType.SUPPLY || e.type === EnemyType.BOSS;
-                  
-                  if (isAirTarget && checkAABB(p, e)) {
-                      e.hp -= p.damage;
-                      if (!p.penetrates) p.markedForDeletion = true;
-                      spawnExplosion(state, p.x, p.y, '#ffffff', 2);
-                  }
-              }
-          });
-      }
+    if (p.isPlayer && !p.isGround && !p.markedForDeletion) {
+      state.enemies.forEach(e => {
+        if (!e.markedForDeletion) {
+          // Air bullets hit everything, but logical checks apply
+          // Turrets are ground units, technically air bullets shouldn't hit them in some rigorous sims,
+          // but for fun arcades, we usually allow it or require ground bombs. 
+          // Prompt implies "Air-to-Air" and "Air-to-Ground", suggesting separation.
+          // Let's enforce: Air weapons -> Aircraft/Supply/Boss. Ground weapons -> Turret/Boss.
+
+          const isAirTarget = e.type === EnemyType.AIRCRAFT || e.type === EnemyType.SUPPLY || e.type === EnemyType.BOSS;
+
+          if (isAirTarget && checkAABB(p, e)) {
+            e.hp -= p.damage;
+            if (!p.penetrates) p.markedForDeletion = true;
+            spawnExplosion(state, p.x, p.y, '#ffffff', 2);
+          }
+        }
+      });
+    }
   });
 
   // 6. Entity Death & Loot
   state.enemies.forEach(e => {
-      if (e.hp <= 0 && !e.markedForDeletion) {
-          e.markedForDeletion = true;
-          state.score += e.scoreValue;
-          spawnExplosion(state, e.x, e.y, '#f97316', 15);
-          if (e.type === EnemyType.SUPPLY) {
-              spawnPowerUp(state, e.x, e.y);
-          }
+    if (e.hp <= 0 && !e.markedForDeletion) {
+      e.markedForDeletion = true;
+      state.score += e.scoreValue;
+      spawnExplosion(state, e.x, e.y, '#f97316', 15);
+      if (e.type === EnemyType.SUPPLY) {
+        spawnPowerUp(state, e.x, e.y);
       }
+    }
   });
 
   // 7. Powerups
   state.powerUps.forEach(p => {
-      p.y += 2; // fall down
-      if (checkAABB(state.player, p)) {
-          p.markedForDeletion = true;
-          state.score += 50;
-          if (p.type === PowerUpType.HEAL) {
-              state.player.hp = Math.min(state.player.hp + 20, state.player.maxHp);
-          } else if (p.type === PowerUpType.RED) {
-              state.player.airWeaponType = WeaponType.MISSILE;
-              state.player.airWeaponLevel = Math.min(state.player.airWeaponLevel + 1, 5);
-          } else if (p.type === PowerUpType.BLUE) {
-              state.player.airWeaponType = WeaponType.LASER;
-              state.player.airWeaponLevel = Math.min(state.player.airWeaponLevel + 1, 5);
-          } else if (p.type === PowerUpType.GREEN) {
-              state.player.groundWeaponLevel = Math.min(state.player.groundWeaponLevel + 1, 3);
-          }
+    p.y += 2; // fall down
+    if (checkAABB(state.player, p)) {
+      p.markedForDeletion = true;
+      state.score += 50;
+      if (p.type === PowerUpType.HEAL) {
+        state.player.hp = Math.min(state.player.hp + 20, state.player.maxHp);
+      } else if (p.type === PowerUpType.RED) {
+        state.player.airWeaponType = WeaponType.MISSILE;
+        state.player.airWeaponLevel = Math.min(state.player.airWeaponLevel + 1, 5);
+      } else if (p.type === PowerUpType.BLUE) {
+        state.player.airWeaponType = WeaponType.LASER;
+        state.player.airWeaponLevel = Math.min(state.player.airWeaponLevel + 1, 5);
+      } else if (p.type === PowerUpType.GREEN) {
+        state.player.groundWeaponLevel = Math.min(state.player.groundWeaponLevel + 1, 3);
       }
-      if (p.y > SCREEN_HEIGHT) p.markedForDeletion = true;
+    }
+    if (p.y > SCREEN_HEIGHT) p.markedForDeletion = true;
   });
 
   // 8. Background & Particles
   state.backgroundOffset = (state.backgroundOffset + SCROLL_SPEED) % SCREEN_HEIGHT;
   state.particles.forEach(p => {
-      p.x += p.vx;
-      p.y += p.vy;
-      p.life--;
+    p.x += p.vx;
+    p.y += p.vy;
+    p.life--;
   });
 
   // Filter deleted entities
@@ -467,11 +474,11 @@ export const updateGameState = (state: GameState, input: InputState): GameState 
   state.powerUps = state.powerUps.filter(p => !p.markedForDeletion);
 
   // Spawning
-  handleSpawning(state);
+  handleSpawning(state, settings);
 
   // Game Over Check
   if (state.player.hp <= 0) {
-      state.gameOver = true;
+    state.gameOver = true;
   }
 
   return state;

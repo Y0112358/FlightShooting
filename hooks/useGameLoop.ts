@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useCallback } from 'react';
-import { GameState, InputState, WeaponType, GroundWeaponLevel } from '../types';
+import { GameState, InputState, WeaponType, GroundWeaponLevel, DifficultySettings } from '../types';
 import { updateGameState } from '../services/gameEngine';
 import { renderGame } from '../services/renderer';
 import { SCREEN_WIDTH, SCREEN_HEIGHT, KEYS } from '../constants';
@@ -36,14 +36,24 @@ const INITIAL_STATE: GameState = {
   flashTimer: 0,
 };
 
-export const useGameLoop = (canvasRef: React.RefObject<HTMLCanvasElement>) => {
+export const useGameLoop = (
+  canvasRef: React.RefObject<HTMLCanvasElement>,
+  settings: DifficultySettings
+) => {
   const requestRef = useRef<number>();
-  const gameState = useRef<GameState>(JSON.parse(JSON.stringify(INITIAL_STATE))); // Deep copy
+  const gameState = useRef<GameState>(JSON.parse(JSON.stringify(INITIAL_STATE)));
+  const settingsRef = useRef(settings);
+
+  // Update settings ref whenever settings prop changes
+  useEffect(() => {
+    settingsRef.current = settings;
+  }, [settings]);
+
   const inputState = useRef<InputState>({
     left: false, right: false, up: false, down: false,
     fireAir: false, fireGround: false, ultimate: false
   });
-  
+
   // Logic for Ultimate debounce
   const prevUltimateRef = useRef(false);
 
@@ -82,21 +92,17 @@ export const useGameLoop = (canvasRef: React.RefObject<HTMLCanvasElement>) => {
   };
 
   const triggerUltimate = () => {
-      // Manual trigger from logic passed to state
-      // Actually handled inside gameEngine via inputState check
-      // But we need to handle edge triggering here to prevent spamming
-      if (inputState.current.ultimate && !prevUltimateRef.current) {
-          // One-shot
-          const state = gameState.current;
-          if (state.player.ultimates > 0) {
-              state.player.ultimates--;
-              state.flashTimer = 20;
-              state.shakeTimer = 30;
-              state.projectiles = state.projectiles.filter(p => p.isPlayer);
-              state.enemies.forEach(e => e.hp -= 100);
-          }
+    if (inputState.current.ultimate && !prevUltimateRef.current) {
+      const state = gameState.current;
+      if (state.player.ultimates > 0) {
+        state.player.ultimates--;
+        state.flashTimer = 20;
+        state.shakeTimer = 30;
+        state.projectiles = state.projectiles.filter(p => p.isPlayer);
+        state.enemies.forEach(e => e.hp -= 100);
       }
-      prevUltimateRef.current = inputState.current.ultimate;
+    }
+    prevUltimateRef.current = inputState.current.ultimate;
   };
 
   const loop = useCallback(() => {
@@ -104,12 +110,10 @@ export const useGameLoop = (canvasRef: React.RefObject<HTMLCanvasElement>) => {
     const ctx = canvasRef.current.getContext('2d');
     if (!ctx) return;
 
-    // Handle Ultimate Edge Trigger here or in Engine.
-    // Let's do it here for clarity
     triggerUltimate();
 
     // Update Physics/Logic
-    gameState.current = updateGameState(gameState.current, inputState.current);
+    gameState.current = updateGameState(gameState.current, inputState.current, settingsRef.current);
 
     // Render
     renderGame(ctx, gameState.current);

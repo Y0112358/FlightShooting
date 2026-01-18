@@ -1,5 +1,5 @@
-export const SCREEN_WIDTH = 600;
-export const SCREEN_HEIGHT = 800;
+export const SCREEN_WIDTH = 700;
+export const SCREEN_HEIGHT = 700;
 
 export const PLAYER_SPEED = 5;
 export const SCROLL_SPEED = 1.5;

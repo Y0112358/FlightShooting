@@ -110,3 +110,9 @@ export interface InputState {
   fireGround: boolean; // K / X
   ultimate: boolean; // L / B
 }
+
+export interface DifficultySettings {
+  enemySpawnRateMultiplier: number; // 0.5 to 2.0 (Lower is faster spawning)
+  enemyHealthMultiplier: number; // 0.5 to 3.0
+  bossHealthMultiplier: number; // 0.5 to 3.0
+}
